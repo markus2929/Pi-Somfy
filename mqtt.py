@@ -151,7 +151,6 @@ class MQTT(threading.Thread, MyLog):
     def __init__(self, group=None, target=None, name=None, args=(), kwargs=None):
         threading.Thread.__init__(self, group=group, target=target, name="MQTT")
         self.shutdown_flag = threading.Event()
-        self.connected_flag = False
         self.t = None
         self.args = args
         self.kwargs = kwargs
@@ -247,7 +246,6 @@ class MQTT(threading.Thread, MyLog):
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
             self.LogInfo("Connected to MQTT (rc=" + str(rc) + ")")
-            self.connected_flag = True
 
             # Mark bridge as online
             self.sendMQTT(AVAILABILITY_TOPIC, "online")
@@ -271,12 +269,17 @@ class MQTT(threading.Thread, MyLog):
 
         else:
             self.LogError("MQTT connection failed (rc=" + str(rc) + ")")
-            self.connected_flag = False
 
     def on_disconnect(self, client, userdata, rc=0):
-        self.connected_flag = False
         if rc != 0:
             self.LogInfo("Disconnected from MQTT (rc=" + str(rc) + ")")
+
+    def on_connect_fail(self, client, userdata):
+        # Called by paho's loop thread each time an automatic reconnect
+        # attempt fails at the socket level (broker down, DNS/IP change,
+        # network outage). Without it those retries are silent.
+        self.LogInfo("MQTT connection to " + self.config.MQTT_Server + ":" + str(self.config.MQTT_Port)
+                     + " failed; retrying")
 
     def set_state(self, shutter_id, level):
         """Callback invoked when a shutter's position changes."""
@@ -300,7 +303,6 @@ class MQTT(threading.Thread, MyLog):
         self._publish_state(shutter_id, state)
 
     def run(self):
-        self.connected_flag = False
         self.LogInfo("Starting MQTT thread")
 
         # Create client (compatible with paho-mqtt 1.x and 2.x)
@@ -321,6 +323,7 @@ class MQTT(threading.Thread, MyLog):
         self.t.on_connect = self.on_connect
         self.t.on_message = self.receiveMessageFromMQTT
         self.t.on_disconnect = self.on_disconnect
+        self.t.on_connect_fail = self.on_connect_fail
         self.shutter.registerCallBack(self.set_state)
         self.shutter.registerMovementCallBack(self.set_movement_state)
 
@@ -346,8 +349,8 @@ class MQTT(threading.Thread, MyLog):
         # Keep this thread alive until shutdown is requested. Reconnection is
         # handled by paho's loop thread (loop_forever with
         # retry_first_connection). Do NOT call reconnect() from here: right
-        # after connect() the CONNACK has not arrived yet, so connected_flag
-        # is still False, and reconnect() swaps the socket out from under the
+        # after connect() the CONNACK has not arrived yet, so the client is
+        # not connected yet, and reconnect() swaps the socket out from under the
         # loop thread, which dies with "'NoneType' object has no attribute
         # 'recv'" and leaves MQTT permanently disconnected.
         while not self.shutdown_flag.wait(5):
