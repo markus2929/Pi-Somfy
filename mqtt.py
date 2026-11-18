@@ -343,17 +343,15 @@ class MQTT(threading.Thread, MyLog):
         # without waiting for a manual loop() call.
         self.t.loop_start()
 
-        # Keep this thread alive until shutdown is requested;
-        # reconnection is handled automatically by paho's loop thread.
-        while not self.shutdown_flag.is_set():
-            try:
-                if not self.connected_flag:
-                    self.LogInfo("Reconnecting to MQTT broker")
-                    self.t.reconnect()
-                time.sleep(5)
-            except Exception as e:
-                self.LogInfo("MQTT reconnect failed: " + str(e))
-                time.sleep(10)
+        # Keep this thread alive until shutdown is requested. Reconnection is
+        # handled by paho's loop thread (loop_forever with
+        # retry_first_connection). Do NOT call reconnect() from here: right
+        # after connect() the CONNACK has not arrived yet, so connected_flag
+        # is still False, and reconnect() swaps the socket out from under the
+        # loop thread, which dies with "'NoneType' object has no attribute
+        # 'recv'" and leaves MQTT permanently disconnected.
+        while not self.shutdown_flag.wait(5):
+            pass
 
         # Clean shutdown
         try:
